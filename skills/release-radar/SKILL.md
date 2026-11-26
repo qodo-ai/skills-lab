@@ -43,7 +43,7 @@ Before step 1, run `${CLAUDE_SKILL_DIR}/scripts/check-update.sh`. It prints one 
 
    Give a version or date and a docs link for every item. Mention a fix only if it fixes something the user has said they hit.
 
-5. **Record the check.** After the user has the brief, run `python3 ${CLAUDE_SKILL_DIR}/scripts/whats-new.py --mark-seen`. Skip this step if the user called the run a test or a dry run.
+5. **Record the check.** Run `python3 ${CLAUDE_SKILL_DIR}/scripts/whats-new.py --mark-seen` once the brief is written: after you send it, or just before your final answer if the run must end in one reply. Skip this step if the user called the run a test or a dry run.
 
 ## Rules
 

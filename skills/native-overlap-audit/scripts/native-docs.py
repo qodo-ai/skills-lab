@@ -4,7 +4,8 @@
 Usage:
   native-docs.py search WORD [WORD ...]   docs pages whose title or summary match
   native-docs.py page PAGE [--max N]      a docs page as Markdown (PAGE is a URL or a slug like ship-command)
-  native-docs.py changelog TERM           changelog lines that mention TERM, with their version
+  native-docs.py page PAGE --grep WORD    only the sections of a long page that mention WORD
+  native-docs.py changelog TERM [TERM …]  changelog lines that mention the phrase, with their version
 
 Quotes for an audit verdict should come from `page` and `changelog`, which
 print the source text unchanged. Standard library only.
@@ -45,12 +46,21 @@ def search(words: list[str]) -> int:
     return 0
 
 
-def page(name: str, limit: int) -> int:
+def page(name: str, limit: int, grep: str | None) -> int:
     url = name if name.startswith("http") else DOCS + name.removesuffix(".md")
     url = url if url.endswith(".md") else url + ".md"
     text = fetch(url)
     text = re.sub(r"\A(?:>.*\n)+\n?", "", text)  # the "Documentation Index" note on every page
     print(f"Source: {url.removesuffix('.md')}\n")
+    if grep:
+        # Split at headings and keep the sections that mention the word, with their heading.
+        sections = re.split(r"(?m)^(?=#{1,4} )", text)
+        hits = [section.strip() for section in sections if grep.lower() in section.lower()]
+        if not hits:
+            print(f"No section of this page mentions {grep!r}.")
+            return 0
+        text = "\n\n".join(hits)
+        print(f"{len(hits)} section(s) mention {grep!r}:\n")
     if len(text) > limit:
         print(text[:limit])
         print(f"\n[Cut at {limit} of {len(text)} characters. Run again with --max {len(text)} for the rest.]")
@@ -84,14 +94,15 @@ def main() -> int:
     page_parser = sub.add_parser("page")
     page_parser.add_argument("name")
     page_parser.add_argument("--max", type=int, default=15000)
-    sub.add_parser("changelog").add_argument("term")
+    page_parser.add_argument("--grep", help="print only the sections that mention this word")
+    sub.add_parser("changelog").add_argument("term", nargs="+")
     args = parser.parse_args()
     try:
         if args.command == "search":
             return search(args.words)
         if args.command == "page":
-            return page(args.name, args.max)
-        return changelog(args.term)
+            return page(args.name, args.max, args.grep)
+        return changelog(" ".join(args.term))
     except Exception as error:  # network or HTTP error: say what failed
         print(f"ERROR: {error.__class__.__name__}: {error}", file=sys.stderr)
         return 1

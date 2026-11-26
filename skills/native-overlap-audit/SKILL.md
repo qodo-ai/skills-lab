@@ -23,14 +23,14 @@ Run each script command on its own, exactly as written here, with nothing added.
 
 1. **Inventory.** Run `python3 ${CLAUDE_SKILL_DIR}/scripts/inventory.py`. It lists every personal, project and plugin skill, command, subagent, plugin and hook, each with its owner, description, the start of its instructions, its git hash and date. It ends with the names installed more than once. If the output is saved to a file because it is long, read the whole file.
 
-2. **Decide what to judge.** Judge items the user owns: owner `you` (personal) and `project`. Plugins from a marketplace belong to their authors: list them at the end as "not yours to change". The exception is a marketplace the user or their organization runs, for example one on the same GitHub organization as the user's repos. Judge those plugins too, and say that you assumed the user maintains them. If the user asks about one specific item, judge only that one.
+2. **Decide what to judge.** Judge items the user owns: owner `you` (personal) and `project`. Plugins from a marketplace belong to their authors: list them at the end as "not yours to change". The exception is a plugin the user or their organization makes, wherever it is listed: a marketplace on the same GitHub organization as the user's repos, or a plugin that wraps their company's product even when it sits in another marketplace. Judge those plugins too, and say that you assumed the user maintains them. If the user asks about one specific item, judge only that one.
 
 3. **Understand each item.** The inventory's excerpt is usually enough to know the job: what the item does, when, and what it adds over a general agent. If it isn't, read the file at the path the inventory gives.
 
 4. **Find the native candidates.** For each item:
    - Check the built-in skills in your own session. Built-in slash commands such as `/ship` may not be visible to you, so the docs are the source for those.
    - Search the docs for the job, not the item's name: `python3 ${CLAUDE_SKILL_DIR}/scripts/native-docs.py search pull request review fix`. Use plain words with no quotes, apostrophes or other punctuation. Try two or three wordings.
-   - Read the best matches: `python3 ${CLAUDE_SKILL_DIR}/scripts/native-docs.py page ship-command`.
+   - Read the best matches: `python3 ${CLAUDE_SKILL_DIR}/scripts/native-docs.py page ship-command`. Pages over 15,000 characters are cut. Add `--grep <word>` to print only the sections that mention the word, or `--max <n>` to read further.
    - Find when a feature landed: `python3 ${CLAUDE_SKILL_DIR}/scripts/native-docs.py changelog /code-review`. Many features, including some CLI commands, have a docs page but no changelog line. Then use the version or plan requirement on the docs page.
 
 5. **Judge each item.** Pick one verdict:
@@ -38,6 +38,7 @@ Run each script command on its own, exactly as written here, with nothing added.
    - **Slim down**: the native feature does the core. Say exactly what the item still adds (a team policy, a tracker, a house style, another agent), and suggest keeping only that, for example as a short skill that calls the native command.
    - **Keep**: there is no native feature for the job, or the native one is clearly weaker for this use. Say what native lacks.
    - **Keep (unverified)**: it looks similar, but the docs did not confirm that native does the job.
+   - **Merge**: no native feature does the job, but another of the user's own items does. Say which copy to keep.
    - **Keep (own product)**: the item is how the user works with a product they build, such as their company's review engine. A native feature with the same job is a competitor, not a replacement. Name it in the product section of the report (step 7).
 
    Every Replace and Slim down verdict quotes the docs page or changelog line it rests on, from `native-docs.py`. "Sounds similar" is not evidence.
