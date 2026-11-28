@@ -40,17 +40,35 @@ LINK_RE = re.compile(r"\]\((?!https?:|#|mailto:)([^)#\s]+)")
 SCRIPT_SUFFIXES = (".sh", ".bash", ".py", ".js", ".mjs", ".ts", ".rb")
 
 
+def yaml_fields(block: str) -> dict[str, str]:
+    """Top-level scalar keys of a YAML mapping, including folded (>) and literal (|) block values."""
+    fields: dict[str, str] = {}
+    lines = block.splitlines()
+    i = 0
+    while i < len(lines):
+        top = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", lines[i])
+        i += 1
+        if not top:
+            continue
+        key, value = top.group(1), top.group(2).strip()
+        if value[:1] in (">", "|") and set(value[1:]) <= set("+-0123456789"):
+            body = []
+            while i < len(lines) and (not lines[i].strip() or lines[i][:1] in (" ", "\t")):
+                body.append(lines[i].strip())
+                i += 1
+            joiner = "\n" if value[0] == "|" else " "
+            fields[key] = joiner.join(body).strip()
+        else:
+            fields[key] = value.strip("\"'")
+    return fields
+
+
 def parse(text: str) -> tuple[dict[str, str], str, int] | None:
     """Frontmatter top-level keys, the body, and the line number where the body starts."""
     match = re.match(r"^---[ \t]*\n(.*?)\n---[ \t]*\n?", text, re.S)
     if not match:
         return None
-    fields: dict[str, str] = {}
-    for line in match.group(1).splitlines():
-        top = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
-        if top:
-            fields[top.group(1)] = top.group(2).strip().strip("\"'")
-    return fields, text[match.end():], match.group(0).count("\n") + 1
+    return yaml_fields(match.group(1)), text[match.end():], match.group(0).count("\n") + 1
 
 
 def in_code(body_lines: list[str]) -> list[bool]:
