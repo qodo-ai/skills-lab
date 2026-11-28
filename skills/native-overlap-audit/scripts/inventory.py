@@ -29,21 +29,35 @@ CLAUDE = HOME / ".claude"
 DESC_LIMIT = 300
 
 
+def yaml_fields(block: str) -> dict[str, str]:
+    """Top-level scalar keys of a YAML mapping, including folded (>) and literal (|) block values."""
+    fields: dict[str, str] = {}
+    lines = block.splitlines()
+    i = 0
+    while i < len(lines):
+        top = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", lines[i])
+        i += 1
+        if not top:
+            continue
+        key, value = top.group(1), top.group(2).strip()
+        if value[:1] in (">", "|") and set(value[1:]) <= set("+-0123456789"):
+            body = []
+            while i < len(lines) and (not lines[i].strip() or lines[i][:1] in (" ", "\t")):
+                body.append(lines[i].strip())
+                i += 1
+            joiner = "\n" if value[0] == "|" else " "
+            fields[key] = joiner.join(body).strip()
+        else:
+            fields[key] = value.strip("\"'")
+    return fields
+
+
 def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     """Top-level scalar keys of the YAML frontmatter, and the body after it."""
     match = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.S)
     if not match:
         return {}, text
-    fields: dict[str, str] = {}
-    key = None
-    for line in match.group(1).splitlines():
-        top = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
-        if top:
-            key = top.group(1)
-            fields[key] = top.group(2).strip().strip("\"'")
-        elif key and line.startswith((" ", "\t")) and fields.get(key) in ("", "|", ">", ">-", "|-"):
-            fields[key] = line.strip()
-    return fields, match.group(2)
+    return yaml_fields(match.group(1)), match.group(2)
 
 
 def one_line(text: str, limit: int) -> str:
@@ -112,27 +126,38 @@ def scan_plugins(rows: list[dict], excerpt: int) -> None:
         return
     origins = marketplace_sources()
     for plugin_id, installs in sorted(plugins.items()):
-        install = installs[0] if isinstance(installs, list) and installs else {}
-        root = Path(install.get("installPath", ""))
-        marketplace = plugin_id.split("@", 1)[1] if "@" in plugin_id else ""
-        owner = f"marketplace {marketplace}" + (f" ({origins[marketplace]})" if origins.get(marketplace) else "")
-        description = ""
-        try:
-            description = json.loads((root / ".claude-plugin" / "plugin.json").read_text()).get("description", "")
-        except (OSError, ValueError):
-            pass
-        rows.append({
-            "kind": "plugin", "name": plugin_id, "source": f"plugin {install.get('version', '')}".strip(),
-            "owner": owner, "description": one_line(description, DESC_LIMIT), "user_invoked_only": False,
-            "excerpt": "", "sha": "", "modified": "", "symlink_to": "", "path": str(root),
-        })
-        source = f"plugin {plugin_id}"
-        scan_skills(root / "skills", source, owner, rows, excerpt)
-        scan_markdown_dir(root / "commands", "command", source, owner, rows, excerpt)
-        scan_markdown_dir(root / "agents", "agent", source, owner, rows, excerpt)
-        hooks_file = root / "hooks" / "hooks.json"
-        if hooks_file.is_file():
-            scan_hooks(hooks_file, source, owner, rows)
+        records = installs if isinstance(installs, list) else [installs] if isinstance(installs, dict) else []
+        seen_paths: set[str] = set()
+        for install in records:
+            path = install.get("installPath", "") if isinstance(install, dict) else ""
+            if path and path not in seen_paths:
+                seen_paths.add(path)
+                scan_plugin_install(plugin_id, install, origins, rows, excerpt)
+
+
+def scan_plugin_install(plugin_id: str, install: dict, origins: dict[str, str], rows: list[dict], excerpt: int) -> None:
+    """One installation of a plugin. A plugin can be installed more than once (user and project scope)."""
+    root = Path(install.get("installPath", ""))
+    marketplace = plugin_id.split("@", 1)[1] if "@" in plugin_id else ""
+    owner = f"marketplace {marketplace}" + (f" ({origins[marketplace]})" if origins.get(marketplace) else "")
+    description = ""
+    try:
+        description = json.loads((root / ".claude-plugin" / "plugin.json").read_text()).get("description", "")
+    except (OSError, ValueError):
+        pass
+    scope = f" ({install['scope']} scope)" if install.get("scope") else ""
+    rows.append({
+        "kind": "plugin", "name": plugin_id, "source": f"plugin {install.get('version', '')}{scope}".strip(),
+        "owner": owner, "description": one_line(description, DESC_LIMIT), "user_invoked_only": False,
+        "excerpt": "", "sha": "", "modified": "", "symlink_to": "", "path": str(root),
+    })
+    source = f"plugin {plugin_id}{' ' + install['version'] if install.get('version') else ''}{scope}"
+    scan_skills(root / "skills", source, owner, rows, excerpt)
+    scan_markdown_dir(root / "commands", "command", source, owner, rows, excerpt)
+    scan_markdown_dir(root / "agents", "agent", source, owner, rows, excerpt)
+    hooks_file = root / "hooks" / "hooks.json"
+    if hooks_file.is_file():
+        scan_hooks(hooks_file, source, owner, rows)
 
 
 def scan_hooks(settings: Path, source: str, owner: str, rows: list[dict]) -> None:
@@ -166,7 +191,7 @@ def find_duplicates(rows: list[dict]) -> dict[str, list[dict]]:
         if row["kind"] in ("skill", "command", "agent"):
             by_name.setdefault(f"{row['kind']}:{row['name']}", []).append(row)
     return {
-        key.split(":", 1)[1]: copies
+        key.replace(":", " ", 1): copies  # "skill qodo-review", "command review": the kind keeps groups apart
         for key, copies in sorted(by_name.items())
         if len({row["source"] for row in copies}) > 1
         and any(not row["source"].startswith("plugin") for row in copies)
@@ -199,8 +224,10 @@ def print_markdown(rows: list[dict], project: Path) -> None:
         print(f"- `{name}` ({identical}):")
         ordered = sorted(copies, key=lambda c: c["modified"], reverse=True)
         for row in ordered:
-            change = "" if row is ordered[0] else f", {diff_summary(row['path'], ordered[0]['path'])} vs the newest"
-            print(f"  - {row['source']}: sha {row['sha'][:8]}, modified {row['modified']}{change}, {row['path']}")
+            change = "" if row is ordered[0] else f", {diff_summary(row['path'], ordered[0]['path'])} vs the first copy listed"
+            print(f"  - {row['source']}: sha {row['sha'][:8]}, file modified {row['modified']}{change}, {row['path']}")
+        print("  - Order is by file time, which copying or reinstalling resets. Compare the contents and any plugin "
+              "version before calling one copy newer.")
 
 
 def diff_summary(old: str, new: str) -> str:

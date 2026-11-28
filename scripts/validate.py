@@ -37,16 +37,34 @@ NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 POSITIONAL_RE = re.compile(r"(?<![\w\\])\$[0-9]\b(?![./,]\d)")
 
 
+def yaml_fields(block: str) -> dict[str, str]:
+    """Top-level scalar keys of a YAML mapping, including folded (>) and literal (|) block values."""
+    fields: dict[str, str] = {}
+    lines = block.splitlines()
+    i = 0
+    while i < len(lines):
+        top = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", lines[i])
+        i += 1
+        if not top:
+            continue
+        key, value = top.group(1), top.group(2).strip()
+        if value[:1] in (">", "|") and set(value[1:]) <= set("+-0123456789"):
+            body = []
+            while i < len(lines) and (not lines[i].strip() or lines[i][:1] in (" ", "\t")):
+                body.append(lines[i].strip())
+                i += 1
+            joiner = "\n" if value[0] == "|" else " "
+            fields[key] = joiner.join(body).strip()
+        else:
+            fields[key] = value.strip("\"'")
+    return fields
+
+
 def parse_frontmatter(text: str) -> tuple[dict[str, str], str] | None:
     match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)$", text, re.S)
     if not match:
         return None
-    fields: dict[str, str] = {}
-    for line in match.group(1).splitlines():
-        top = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
-        if top:
-            fields[top.group(1)] = top.group(2).strip().strip("\"'")
-    return fields, match.group(2)
+    return yaml_fields(match.group(1)), match.group(2)
 
 
 def check_skill(skill_dir: Path, errors: list[str]) -> None:
