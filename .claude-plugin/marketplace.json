@@ -1,0 +1,25 @@
+{
+  "name": "qodo-skills-lab",
+  "owner": {
+    "name": "Qodo",
+    "url": "https://github.com/qodo-ai"
+  },
+  "metadata": {
+    "description": "Practical agent skills for software factory engineers, from the Qodo team.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "stay-current",
+      "description": "Keep up with Claude Code: brief what shipped since you last checked, and audit your own skills and plugins for ones that native features now replace.",
+      "source": "./",
+      "strict": false,
+      "license": "MIT",
+      "keywords": ["changelog", "skills", "audit"],
+      "skills": [
+        "./skills/release-radar",
+        "./skills/native-overlap-audit"
+      ]
+    }
+  ]
+}
