@@ -18,7 +18,13 @@ Usage:
   whats-new.py --days 30       brief for the last 30 days
   whats-new.py --since 2.1.300 brief since a given Claude Code version
   whats-new.py --all           keep every changelog line
-  whats-new.py --mark-seen     record now as the last check
+  whats-new.py --mark-seen     record what the last brief showed as seen
+  whats-new.py --undo-seen     restore the state from before the last --mark-seen
+
+Each brief saves a snapshot of exactly what it showed (pending.json).
+--mark-seen commits that snapshot, source by source: a source that failed in
+the brief keeps its old date, so its items come back next time. It backs up
+the previous state first, so a brief that never reached the user can be undone.
 
 State lives outside the skill folder, so plugin updates don't erase it:
   ${RELEASE_RADAR_STATE_DIR:-~/.claude/release-radar}/state.json
@@ -48,6 +54,9 @@ PLATFORM_NOTES_URL = "https://platform.claude.com/docs/en/release-notes/overview
 APPS_NOTES_URL = "https://support.claude.com/en/articles/12138966-release-notes"
 STATE_DIR = Path(os.environ.get("RELEASE_RADAR_STATE_DIR", Path.home() / ".claude" / "release-radar"))
 STATE_FILE = STATE_DIR / "state.json"
+PENDING_FILE = STATE_DIR / "pending.json"
+PREVIOUS_FILE = STATE_DIR / "state.prev.json"
+SOURCES = ("changelog", "platform", "apps")
 FIRST_RUN_DAYS = 7
 HEADING = "\x00H:"
 MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December"
@@ -74,11 +83,30 @@ def parse_date(text: str) -> dt.date:
     return dt.datetime.strptime(text, "%B %d, %Y").date()
 
 
-def load_state() -> dict:
+def load_state(path: Path = STATE_FILE) -> dict:
     try:
-        return json.loads(STATE_FILE.read_text())
+        data = json.loads(path.read_text())
     except (OSError, ValueError):
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def parse_iso(value: object, what: str) -> dt.date | None:
+    """A saved ISO date, or None with a warning when it's missing or malformed."""
+    if not value:
+        return None
+    try:
+        return dt.date.fromisoformat(str(value))
+    except ValueError:
+        print(f"WARN: saved {what} date {value!r} is not a valid date; treating it as never checked", file=sys.stderr)
+        return None
+
+
+def source_dates(state: dict) -> dict[str, dt.date | None]:
+    """When each source was last seen. Older state files have one shared checked_at."""
+    saved = state.get("sources") if isinstance(state.get("sources"), dict) else {}
+    shared = state.get("checked_at")
+    return {name: parse_iso(saved.get(name, shared), name) for name in SOURCES}
 
 
 def docs_pages(index: str) -> dict[str, str]:
@@ -211,19 +239,47 @@ def installed_version() -> str:
     return match.group(0) if match else ""
 
 
-def mark_seen(changelog: str) -> int:
-    index, error = try_fetch(DOCS_INDEX_URL)
+def mark_seen() -> int:
+    """Commit the last brief's snapshot: only the sources it actually showed move forward."""
+    pending = load_state(PENDING_FILE)
+    if not pending:
+        print("ERROR: no brief to mark: run whats-new.py first, then --mark-seen", file=sys.stderr)
+        return 1
     state = load_state()
-    state["last_seen_version"] = releases(changelog)[0][0]
-    state["checked_at"] = dt.date.today().isoformat()
-    if index:
-        state["docs_pages"] = sorted(docs_pages(index))
-    else:
-        print(f"WARN: docs index {error}; docs baseline not updated", file=sys.stderr)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if STATE_FILE.exists():
+        PREVIOUS_FILE.write_text(STATE_FILE.read_text())
+    sources = {name: (d.isoformat() if d else None) for name, d in source_dates(state).items()}
+    kept = []
+    for name in SOURCES:
+        if pending["sources"].get(name):
+            sources[name] = pending["sources"][name]
+        else:
+            kept.append(name)
+    state["sources"] = sources
+    state["checked_at"] = min((d for d in sources.values() if d), default=None)
+    if pending.get("version"):
+        state["last_seen_version"] = pending["version"]
+    if pending.get("docs_pages") is not None:
+        state["docs_pages"] = pending["docs_pages"]
+    else:
+        kept.append("docs pages")
     STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
-    print(f"Marked seen: Claude Code {state['last_seen_version']} on {state['checked_at']}, "
-          f"{len(state.get('docs_pages', []))} docs pages ({STATE_FILE})")
+    PENDING_FILE.unlink()
+    print(f"Marked seen: Claude Code {state.get('last_seen_version')}, sources {sources} ({STATE_FILE})")
+    if kept:
+        print(f"Not advanced (they failed in the brief, so they'll be covered next time): {', '.join(kept)}")
+    print("If this brief never reached the user, run --undo-seen.")
+    return 0
+
+
+def undo_seen() -> int:
+    if not PREVIOUS_FILE.exists():
+        print("ERROR: nothing to undo: no state from before the last --mark-seen", file=sys.stderr)
+        return 1
+    STATE_FILE.write_text(PREVIOUS_FILE.read_text())
+    PREVIOUS_FILE.unlink()
+    print(f"Restored the state from before the last --mark-seen ({STATE_FILE})")
     return 0
 
 
@@ -232,30 +288,46 @@ def main() -> int:
     parser.add_argument("--since", help="Claude Code version to brief from (exclusive)")
     parser.add_argument("--days", type=int, help="brief the last N days instead of since the last check")
     parser.add_argument("--all", action="store_true", help="keep every changelog line")
-    parser.add_argument("--mark-seen", action="store_true", help="record now as the last check")
+    parser.add_argument("--mark-seen", action="store_true", help="record what the last brief showed as seen")
+    parser.add_argument("--undo-seen", action="store_true", help="restore the state from before the last --mark-seen")
     args = parser.parse_args()
+    if args.mark_seen:
+        return mark_seen()
+    if args.undo_seen:
+        return undo_seen()
 
     changelog, error = try_fetch(CHANGELOG_URL)
     if changelog is None:
         print(f"ERROR: Claude Code changelog {error}: {CHANGELOG_URL}", file=sys.stderr)
         return 1
-    if args.mark_seen:
-        return mark_seen(changelog)
 
     state = load_state()
+    seen = source_dates(state)
     today = dt.date.today()
-    if args.days:
-        window_start, basis = today - dt.timedelta(days=args.days), f"the last {args.days} days"
-    elif state.get("checked_at"):
-        window_start, basis = dt.date.fromisoformat(state["checked_at"]), f"the last check on {state['checked_at']}"
-    else:
-        window_start, basis = today - dt.timedelta(days=FIRST_RUN_DAYS), f"first run, so the last {FIRST_RUN_DAYS} days"
-    since_version = args.since or (None if args.days else state.get("last_seen_version"))
-
     all_releases = releases(changelog)
-    head = all_releases[0][0] if all_releases else "unknown"
-    dates = release_dates(try_fetch(DOCS_CHANGELOG_URL)[0])
+    versions = [v for v, _ in all_releases]
+    head = versions[0] if versions else "unknown"
+    docs_changelog, dates_error = try_fetch(DOCS_CHANGELOG_URL)
+    dates = release_dates(docs_changelog)
     installed = installed_version()
+
+    since_version = args.since or (None if args.days else state.get("last_seen_version"))
+    if since_version and since_version not in versions:
+        print(f"WARN: version {since_version} is not in the changelog; showing releases by date instead", file=sys.stderr)
+        since_version = None
+
+    # One window per source. --days and --since move every source; otherwise each source starts where it was last seen.
+    first_run = today - dt.timedelta(days=FIRST_RUN_DAYS)
+    if args.days:
+        starts = dict.fromkeys(SOURCES, today - dt.timedelta(days=args.days))
+        basis = f"the last {args.days} days"
+    elif args.since and since_version and since_version in dates:
+        starts = dict.fromkeys(SOURCES, dates[since_version])
+        basis = f"since version {since_version} ({dates[since_version]:%B %-d, %Y})"
+    else:
+        starts = {name: seen[name] or first_run for name in SOURCES}
+        basis = "since each source was last seen" if any(seen.values()) else f"first run, so the last {FIRST_RUN_DAYS} days"
+    window_start = min(starts.values())
 
     print("# What's new in Claude\n")
     print(f"- Window: from {window_start:%B %-d, %Y} ({basis}). A day on the window's edge can repeat items from the last brief.")
@@ -263,42 +335,50 @@ def main() -> int:
     print(f"- Installed Claude Code: {installed or 'not found on PATH'}")
     if installed and installed != head:
         print(f"- Your build is behind: items newer than {installed} may not be available yet (`claude update`).")
+    if not dates:
+        print(f"- Release dates unavailable (docs changelog {dates_error or 'had no dates'}). Releases are cut by version, "
+              "or the last 5 are shown, which may predate the window.")
 
     print("\n## Claude Code changelog\n\nSource: " + CHANGELOG_URL)
     shown = 0
     for version, lines in all_releases:
         if since_version and version == since_version:
             break
-        if not since_version and version in dates and dates[version] < window_start:
+        if not since_version and version in dates and dates[version] < starts["changelog"]:
             break
-        if not since_version and version not in dates and shown >= 5:
-            break  # no dates available: fall back to 5 releases
+        if not since_version and not dates and shown >= 5:
+            break
         print_release(version, dates.get(version), lines, args.all)
         shown += 1
-        if shown >= 60:
-            print("\n(Stopped after 60 releases.)")
-            break
     if shown == 0:
         print("No new releases.")
 
     print("\n## New Claude Code docs pages\n\nSource: " + DOCS_INDEX_URL)
-    if not state.get("docs_pages"):
+    index, error = try_fetch(DOCS_INDEX_URL)
+    current_pages = docs_pages(index) if index else None
+    if current_pages is None:
+        print(f"Docs index {error}. Pages added since the last check will be listed next time.")
+    elif not state.get("docs_pages"):
         print("No baseline yet: after this brief, run with --mark-seen, and later briefs list pages added since.")
     else:
-        index, error = try_fetch(DOCS_INDEX_URL)
-        if index is None:
-            print(f"Docs index {error}.")
-        else:
-            pages = docs_pages(index)
-            added = sorted(set(pages) - set(state["docs_pages"]))
-            print("\n".join(f"- {pages[url]}: {url}" for url in added) if added else "None since the last check.")
+        added = sorted(set(current_pages) - set(state["docs_pages"]))
+        print("\n".join(f"- {current_pages[url]}: {url}" for url in added) if added else "None since the last check.")
 
-    text, error = try_fetch(PLATFORM_NOTES_URL)
+    text, platform_error = try_fetch(PLATFORM_NOTES_URL)
     print_notes("Claude Platform release notes (API, SDKs, Console)", PLATFORM_NOTES_URL,
-                platform_notes(text, window_start) if text else None, error)
-    page, error = try_fetch(APPS_NOTES_URL)
+                platform_notes(text, starts["platform"]) if text else None, platform_error)
+    page, apps_error = try_fetch(APPS_NOTES_URL)
     print_notes("Claude Apps release notes", APPS_NOTES_URL,
-                apps_notes(page, window_start) if page else None, error)
+                apps_notes(page, starts["apps"]) if page else None, apps_error)
+
+    # Snapshot exactly what this brief showed, for --mark-seen.
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = today.isoformat()
+    PENDING_FILE.write_text(json.dumps({
+        "version": head if versions else None,
+        "docs_pages": sorted(current_pages) if current_pages is not None else None,
+        "sources": {"changelog": stamp, "platform": stamp if text else None, "apps": stamp if page else None},
+    }, indent=2) + "\n")
     return 0
 
 
