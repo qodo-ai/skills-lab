@@ -8,6 +8,8 @@ A skill belongs in the lab when it is:
 - **Useful outside Qodo.** No internal URLs, Slack channels, customer names, credentials or paths that only exist on your laptop.
 - **Built on primary sources.** It reads docs, changelogs, APIs or the codebase. It doesn't brief from the model's memory.
 - **Small and focused.** One job per skill. If the description needs "and also", it's probably two skills.
+- **Self-contained.** No dependency on another skill or a third-party tool. Scripts use bash, git and the Python standard library, so a skill works on a fresh machine.
+- **Ours.** Built on how we review and ship (see "How we build skills" in the README), not a port of someone else's skill.
 
 Skills that are part of the Qodo product go to [qodo-skills](https://github.com/qodo-ai/qodo-skills) instead.
 
@@ -30,8 +32,10 @@ Skills that are part of the Qodo product go to [qodo-skills](https://github.com/
 ## Before you open a PR
 
 ```bash
-python3 scripts/validate.py      # frontmatter, placeholders, links, marketplace
-claude plugin validate .         # Claude Code's own manifest check
+python3 scripts/validate.py                                   # frontmatter, placeholders, links, marketplace
+python3 skills/skill-lint/scripts/lint.py skills              # portability and best-practice checks
+claude plugin validate .                                      # Claude Code's own manifest check
+skills/skill-lint/scripts/trial.sh skills/<name> "<task>"     # a real run, with a friction report
 ```
 
-Then **run the skill for real** in a fresh session, and say in the PR what you ran and what you changed because of it. Running it is where most problems show up: every skill in this repo had bugs that only appeared on a real run.
+Then **run the skill for real** in a fresh session (the trial script does this), and say in the PR what you ran and what you changed because of it. Running it is where most problems show up: every skill in this repo had bugs that only appeared on a real run.

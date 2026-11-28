@@ -20,6 +20,29 @@
         "./skills/release-radar",
         "./skills/native-overlap-audit"
       ]
+    },
+    {
+      "name": "code-health",
+      "description": "Keep a codebase easy for people and agents to change: review where code lives and which way dependencies point, and write the checks agents must pass into AGENTS.md.",
+      "source": "./",
+      "strict": false,
+      "license": "MIT",
+      "keywords": ["architecture", "dependencies", "agents-md", "ci"],
+      "skills": [
+        "./skills/structure-review",
+        "./skills/agent-guardrails"
+      ]
+    },
+    {
+      "name": "skill-authoring",
+      "description": "Build agent skills that work on the first real run: lint them, judge them, and trial-run them in a fresh session.",
+      "source": "./",
+      "strict": false,
+      "license": "MIT",
+      "keywords": ["skills", "lint", "testing"],
+      "skills": [
+        "./skills/skill-lint"
+      ]
     }
   ]
 }
